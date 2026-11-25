@@ -85,6 +85,8 @@ class QQProfileTool(BaseTool):
             self.avatar_desc_cache_seconds = float(avatar_desc_cache_seconds)
         except (TypeError, ValueError):
             self.avatar_desc_cache_seconds = _AVATAR_DESC_TTL
+        # 最近一次头像识别的失败原因（用于在工具输出里告诉用户"为什么没描述"）
+        self._avatar_desc_reason = ""
 
     # ==================== 基础取值工具 ====================
 
@@ -207,8 +209,11 @@ class QQProfileTool(BaseTool):
         Returns:
             操作结果文本。
         """
-        if not self.adapter or not self.adapter.bot:
-            return "错误：适配器不可用。"
+        if not self.adapter or not getattr(self.adapter, "bot", None):
+            return (
+                "错误：当前账号的适配器不可用（未绑定或尚未连接）。\n"
+                "请在 WebUI 检查该 QQ 适配器的状态，重启后重试。"
+            )
 
         # 判定读写模式
         # 关键：不传 user_id 时用**多级兜底**解析 self_id。
@@ -469,6 +474,13 @@ class QQProfileTool(BaseTool):
                     f"查询失败：协议端 6 秒内没有响应 get_stranger_info（user_id={qq}）。\n"
                     "可能原因：① 该协议端未实现此接口 ② WebSocket 断线 ③ 协议端正在重连。"
                 )
+            low = (err_note or "").lower()
+            if "websocket" in low or "未连接" in (err_note or "") or "connection" in low:
+                return (
+                    f"查询失败：当前账号的协议端连接不可用（{err_note}）。\n"
+                    "这不是用户不存在——请检查该 QQ 适配器是否在线"
+                    "（在 WebUI 里重启该适配器后重试）。"
+                )
             return (f"查询失败：用户 {qq} 不存在或无权限。"
                     + (f"（{err_note}）" if err_note else ""))
 
@@ -489,7 +501,9 @@ class QQProfileTool(BaseTool):
             if avatar_desc:
                 result += f"  头像：{avatar_desc}\n"
             else:
-                result += f"  头像：{head_url}\n"
+                reason = getattr(self, "_avatar_desc_reason", "")
+                reason = f"（未识别：{reason}）" if (describe and reason) else ""
+                result += f"  头像：{head_url}{reason}\n"
         else:
             result += "  头像：（无法获取）\n"
 
@@ -579,17 +593,19 @@ class QQProfileTool(BaseTool):
             头像描述文本；失败时返回空串。
         """
         try:
-            from qq_core.avatar_view import describe_avatar
+            from qq_core.avatar_view import describe_avatar_ex
         except ImportError:
+            self._avatar_desc_reason = "框架缺少 avatar_view 模块"
             return ""
 
         vlm = None
         try:
             vlm = self.ctx.provider_mgr.get_default_vlm()
-        except Exception:
-            vlm = None
+        except Exception as e:
+            # 不在这里返回：让 describe_avatar_ex 统一生成可读原因
+            logger.debug(f"[QQ增强2] 取默认 VLM 失败: {type(e).__name__}: {e}")
 
-        return await describe_avatar(
+        desc, reason = await describe_avatar_ex(
             head_url,
             vlm=vlm,
             ctx=self.ctx,
@@ -598,6 +614,11 @@ class QQProfileTool(BaseTool):
             ttl=self.avatar_desc_cache_seconds,
             lang=self._get_locale_lang(),
         )
+        self._avatar_desc_reason = reason
+        # 告警由 avatar_view._warn_once 统一按"原因"去重；这里只留调试信息
+        if reason:
+            logger.debug(f"[QQ增强2] 头像未识别: {head_url} → {reason}")
+        return desc
 
     async def _fetch_avatar_url(self, qq: str) -> str:
         """兜底获取头像 URL（get_qq_avatar 仅 LLOneBot 支持）。
