@@ -32,7 +32,7 @@ ensure_framework_path()
 
 import qq_core.wake_scheduler as ws_mod
 from qq_core.event_normalizer import (
-    QQEvent, E_POKE, E_EMOJI_LIKE, E_BAN, E_UNBAN, E_PROFILE_LIKE_SELF,
+    QQEvent, E_POKE, E_EMOJI_LIKE, E_BAN, E_UNBAN, E_PROFILE_LIKE_SELF, normalize_notice,
 )
 from qq_core.env_renderer import render_env_summary
 from qq_core.event_store import EventStore
@@ -69,8 +69,24 @@ def test_bug10_like_settle():
         wake_max_per_hour=-1,
     )
 
-    ev = QQEvent(eid="1", etype=E_PROFILE_LIKE_SELF, sid="napcat:dm:1", ts=int(time.time()),
-                 actor="1001", extra={"times": 1})
+    # NapCat 和 SnowLuma 共用的 OneBot 结构，资料卡通知省略 user_id 和 group_id。
+    ev = normalize_notice(
+        {
+            "post_type": "notice",
+            "notice_type": "notify",
+            "sub_type": "profile_like",
+            "self_id": 3003,
+            "time": 1795737600,
+            "operator_id": 1001,
+            "operator_nick": "点赞者",
+            "times": 3,
+        },
+        sid="napcat:dm:1001",
+        self_id="3003",
+    )
+    assert ev is not None
+    assert ev.etype == E_PROFILE_LIKE_SELF
+    assert ev.actor == "1001"
 
     async def scenario():
         await sched.on_profile_like(ev)
@@ -83,6 +99,11 @@ def test_bug10_like_settle():
     n_before, n_after = _run(scenario())
     assert n_before == 0, f"窗口内不应唤醒: {n_before}"
     assert n_after == 1, f"窗口结束后应结算 1 次唤醒: {n_after}"
+    published = ctx.event_bus.published[0]
+    assert published.session.session_type == "dm"
+    assert published.session.session_id == "1001"
+    assert published.message.sender.user_id == "1001"
+    assert "资料卡×3" in published.message.chain.message_list[0].repr
     _run(sched.terminate())
     print(f"  ✓ Bug10: 点赞窗口结束自动结算（{n_before}→{n_after}）")
 

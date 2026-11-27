@@ -41,6 +41,14 @@
 - NapCat / LLOneBot / SnowLuma 三家协议端。
 - 贴表情、资料卡点赞、戳一戳、禁言、进退群、撤回、名片/头衔/管理员/精华/文件 等事件全覆盖。
 
+#### SnowLuma 资料卡点赞排查
+
+资料卡点赞依赖协议端实时上报。SnowLuma v1.12.0 的发布记录已包含点赞通知支持（`447b40a`）和真实数据解码验证（`eda1c32`）。若运行的构建早于该功能，升级到包含上述改动的版本并重连。 [SnowLuma v1.12.0 发布记录存档](https://newreleases.io/project/github/SnowLuma/SnowLuma/release/v1.12.0)
+
+1. 用另一个 QQ 账号给机器人的资料卡点赞，检查 KiraAI 所连的 OneBot WebSocket 是否收到 `post_type=notice`、`notice_type=notify`、`sub_type=profile_like`。NapCat 和支持此功能的 SnowLuma 都在顶层提供 `operator_id`、`operator_nick`、`times`，资料卡通知无需 `user_id` 或 `group_id`。 [NapCat 事件定义](https://github.com/NapNeko/NapCatQQ/blob/49ecfe0f56c1e0649db6988444950216fd5fe792/packages/napcat-onebot/event/notice/OB11ProfileLikeEvent.ts) · [SnowLuma 事件转换](https://github.com/zhx57/SnowLuma/blob/ef2dd328dc17364ee653364a5723a6c81883a7ca/packages/onebot/src/event-converter/to-notice.ts#L220-L233)
+2. 如果连接上没有该帧，检查 SnowLuma 版本、事件上报路径和过滤配置。如果有该帧却没有插件的「收到资料卡点赞」日志，检查 KiraAI 是否把原始通知交给插件。
+3. 如果出现该日志，检查 `wake_profile_like`、合并窗口（默认最后一次点赞后等 10 秒）、静默时段、配额及屏蔽设置。默认优先唤醒点赞者最近活跃的会话，没有候选会话时回退到与点赞者的私聊。
+
 ## 配置
 
 详见 `schema.json`（28 个配置键）。完整列表：
